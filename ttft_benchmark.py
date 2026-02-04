@@ -137,6 +137,28 @@ def _count_words(text: str) -> int:
     return len(words)
 
 
+def _determine_results_directory() -> str:
+    """
+    Determine the directory to store results files.
+    NOTE: Directory creation is handled by the caller.
+    """
+
+    # Determine results directory
+    results_dir_str = os.getenv("RESULTS_DIR")
+    if results_dir_str and results_dir_str.strip():
+        results_dir = results_dir_str.strip()
+    else:
+        # Derive from LOG_FILE_PATH if possible
+        log_file_path = os.getenv("LOG_FILE_PATH", "ttft_benchmark_data.jsonl")
+        log_file = Path(log_file_path)
+        if log_file.parent.name:  # If LOG_FILE_PATH includes a directory
+            results_dir = str(log_file.parent)
+        else:
+            results_dir = "logs"
+
+    return results_dir
+
+
 def _generate_prompt(target_tokens: int) -> str:
     """
     Generate a prompt of approximately target_tokens length.
@@ -556,8 +578,14 @@ def main() -> None:
     timestamp = benchmark_run_dt.strftime("%Y%m%d_%H%M%S")
     filename = f"ttft_benchmark_{timestamp}.txt"
 
+    # Construct the results file path
+    results_dir = _determine_results_directory()
+    results_file_path = Path(results_dir) / filename
+    # Ensure the parent directory exists
+    results_file_path.parent.mkdir(parents=True, exist_ok=True)
+
     try:
-        with open(filename, "w", encoding="utf-8") as results_file:
+        with open(results_file_path, "w", encoding="utf-8") as results_file:
             # Run the benchmarks
             results, run_id_base = run_benchmark(
                 results_file=results_file,
@@ -572,7 +600,7 @@ def main() -> None:
                 cost_summary=cost_summary,
                 results_file=results_file)
 
-        print(f"\nResults saved to {filename}")
+        print(f"\nResults saved to {results_file_path}")
 
     except KeyboardInterrupt:
         print("\n\nBenchmark interrupted by user.")
