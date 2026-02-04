@@ -15,6 +15,15 @@ This benchmark script was created to empirically validate theoretical per-token 
 git clone https://github.com/nirmalyaghosh/ttft-benchmark.git
 cd ttft-benchmark
 
+# Create a Python virtual environment
+python -m venv .venv
+
+# Activate the virtual environment:
+# (if using Windows)
+.\.venv\Scripts\activate
+# (if using macOS/Linux)
+source .venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 
