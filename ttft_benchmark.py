@@ -77,7 +77,13 @@ SLEEP_SECONDS_BETWEEN_REQUESTS =\
 # Logging setup
 # -----------------------------------------------------------------------------
 
-log_file = Path(os.getenv("LOG_FILE_PATH", "ttft_benchmark_data.jsonl"))
+log_file_path = os.getenv("LOG_FILE_PATH", "ttft_benchmark_data.jsonl")
+log_file = Path(log_file_path)
+# Ensure the parent directory exists
+# (only if path contains "logs" before ".jsonl")
+if "logs" in log_file_path and \
+        log_file_path.find("logs") < log_file_path.rfind(".jsonl"):
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
