@@ -41,6 +41,7 @@ import uuid
 import structlog
 
 from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import (
     Any,
@@ -84,10 +85,18 @@ log_file = Path(log_file_path)
 if "logs" in log_file_path and \
         log_file_path.find("logs") < log_file_path.rfind(".jsonl"):
     log_file.parent.mkdir(parents=True, exist_ok=True)
+# Configure standard logging to write to a file
+# (one per day, keep number of days per value set in LOG_FILE_BACKUP_COUNT)
+trf_handler = TimedRotatingFileHandler(
+    log_file,
+    when="midnight",
+    encoding="utf-8",
+    backupCount=int(os.getenv("LOG_FILE_BACKUP_COUNT", "30")))
+trf_handler.suffix = "%Y%m%d"
 logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
-    handlers=[logging.FileHandler(log_file, mode="a", encoding="utf-8")]
+    handlers=[trf_handler]
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 

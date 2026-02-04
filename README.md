@@ -216,7 +216,9 @@ The script generates:
 {"event_type": "response.completed", "run_id": "56fa5a4e-6593-45f5-b215-107582f58a31-5000", "event": "stream_event", "timestamp": "2026-02-03T15:54:24.000370Z"}
 {"model": "gpt-5-nano", "chunk": null, "usage": {"input_tokens": 4198, "input_tokens_details": {"cached_tokens": 4096}, "output_tokens": 7, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 4205}, "run_id": "56fa5a4e-6593-45f5-b215-107582f58a31-5000", "timestamp": "2026-02-03T15:54:24.000370Z", "event": "api_response"}
 ```
-Note: Some lines omitted for brevity
+Note:
+- Some lines omitted for brevity
+- A new file will be created for each day with date based suffix (for example `ttft_benchmark_data.jsonl.20260204`), and kept for the number of days as set in the environment variable `LOG_FILE_BACKUP_COUNT`
 
 
 ### Sample Contents Of Results File Generated
