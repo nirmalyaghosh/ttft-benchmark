@@ -4,7 +4,9 @@ A simple, reproducible tool for measuring Time to First Token (TTFT) across diff
 
 This benchmark script was created to empirically validate theoretical per-token latency figures from published sources. The results reveal insights about when prompt size optimisation matters — and when it does not.
 
-**Related blog post:** [How Prompt Size Directly Impacts LLM Response Latency](https://www.nirmalya.net/posts/2026/02/prompt-size-impact-on-llm-response/)
+**Related blog posts:**
+- [How Prompt Size Directly Impacts LLM Response Latency](https://www.nirmalya.net/posts/2026/02/prompt-size-impact-on-llm-response/)
+- [TTFT Optimisation: Practical Patterns](https://www.nirmalya.net/posts/2026/02/ttft-optimisation-practical-patterns/)
 
 ---
 
@@ -31,8 +33,11 @@ pip install -r requirements.txt
 cp ttft_benchmark.env.example ttft_benchmark.env
 # Edit ttft_benchmark.env with your API credentials
 
-# Run the benchmark
+# Run the standard benchmark (TTFT vs prompt size)
 python ttft_benchmark.py
+
+# Run the prefix caching benchmark (cache-miss vs cache-hit TTFT)
+python ttft_benchmark.py --prefix-caching
 ```
 
 Notes:
@@ -45,12 +50,24 @@ Notes:
 
 ## What This Measures
 
-The script measures **Time to First Token (TTFT)** - the latency between sending a request and receiving the first token of the response. This metric matters for user-perceived responsiveness in conversational AI applications.
+The script measures **Time to First Token (TTFT)**, the latency between sending a request and receiving the first token of the response. This metric matters for user-perceived responsiveness in conversational AI applications.
 
-The benchmark tests five prompt sizes (100, 500, 1,000, 2,000, and 5,000 tokens) with 10 iterations each, calculating:
+### Standard mode (default)
+
+Tests five prompt sizes (100, 500, 1,000, 2,000, and 5,000 tokens) with 10 iterations each, calculating:
 - Mean, median, min, max, and standard deviation per size
 - Per-token latency between consecutive prompt sizes
 - Total token usage for cost estimation
+
+### Prefix caching mode (`--prefix-caching`)
+
+Measures the TTFT difference between cache-miss and cache-hit requests across configurable prefix sizes (default: 1,500, 3,000, 5,000 tokens). For each prefix size:
+- 1 warmup request (discarded)
+- N=3 cache-miss measurements (distinct system prompts to avoid inadvertent caching)
+- N=20 cache-hit measurements (same prefix, varying user queries)
+- Reports P50, P95, mean, stdev for both miss and hit distributions
+- Verifies cache hits via the API response's `cached_tokens` field
+- Compares measured TTFT reduction against arithmetic estimates ("Calculated vs Measured")
 
 ---
 
@@ -86,6 +103,19 @@ This is deliberate. Production applications experience all these factors, not ju
 - Provider-side caching or optimisation
 
 These uncontrolled factors are the point: they represent real-world conditions most developers encounter.
+
+### Prefix Caching Test Design
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Prefix sizes | 1,500, 3,000, 5,000 tokens | Covers range above OpenAI's 1,024-token caching threshold |
+| Cache-miss iterations | 3 | Distinct system prompts per measurement to avoid inadvertent caching |
+| Cache-hit iterations | 20 | Sufficient for P50/P95 reporting |
+| Warmup | 1 request per prefix size | Avoids TCP/TLS handshake contamination |
+| Inter-request delay | 15 seconds | Matches standard mode; avoids rate limiting |
+| System prompt content | Padded instructional text | Ensures consistent tokenisation above caching threshold |
+
+The benchmark validates cache hits by checking `cached_tokens` in the API response usage data. A "Calculated vs Measured" comparison surfaces the gap between arithmetic estimates (which assume prefill cost dominates) and empirical results (which include network latency and infrastructure overhead).
 
 ---
 
@@ -175,6 +205,34 @@ Some models showed positive per-token latency under certain conditions, confirmi
 - At **scale** where small per-request savings compound across many requests
 
 For most developers using shared API endpoints, the infrastructure variance dominates any optimisation from prompt size reduction.
+
+---
+
+## Results: Prefix Caching
+
+Test conducted from Singapore against Azure OpenAI (gpt-4o-mini, Australia East), March 2026.
+
+### Summary Table
+
+| Prefix Size | Cache Miss (mean) | Cache Hit (P50) | Cache Hit (P95) | Measured Reduction | Cached |
+|---|---|---|---|---|---|
+| ~1,500 tokens | 1.657s | 1.577s | 1.645s | 4.9% | 19/20 |
+| ~3,000 tokens | 1.473s | 1.330s | 1.628s | 9.7% | 20/20 |
+| ~5,000 tokens | 1.744s | 1.387s | 1.651s | 20.5% | 20/20 |
+
+### Calculated vs Measured
+
+| Prefix Size | Calculated Reduction | Measured Reduction | Delta |
+|---|---|---|---|
+| ~1,500 tokens | 99.0% | 4.9% | -94.1pp |
+| ~3,000 tokens | 99.5% | 9.7% | -89.8pp |
+| ~5,000 tokens | 99.7% | 20.5% | -79.2pp |
+
+The "Calculated" column assumes 100% of prefix tokens are cached and only user query tokens (~15) incur prefill cost. The gap is explained by network round-trip latency (Singapore to Australia East) and infrastructure overhead, which represent a large, roughly fixed portion of TTFT. Prefix caching eliminates server-side prefill compute, but this saving is small relative to the total latency budget on a shared API endpoint.
+
+The measured reduction scales with prefix size (5% to 20%), confirming that caching is working, but bounded by network and infrastructure latency. For self-hosted deployments where network latency is negligible, the measured reduction would approach the calculated estimate.
+
+This finding reinforces the Practical Optimisation Hierarchy from the standard benchmark: infrastructure tier and geographic routing dominate on shared endpoints.
 
 ---
 
