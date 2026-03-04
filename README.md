@@ -255,11 +255,24 @@ Published benchmarks report figures ranging from 0.04ms to 0.24ms → a 6x varia
 
 ## Output
 
-The script generates:
+### Benchmark script (`ttft_benchmark.py`)
 
 1. **Console output** — real-time progress
-2. **JSONL log** — `ttft_benchmark_data.jsonl` with per-request details for further analysis
-3. **Results file** — `ttft_benchmark_YYYYMMDD_HHMMSS.txt` with full statistics
+2. **JSONL log** — `logs/ttft_benchmark_data.jsonl` with per-request details for further analysis
+3. **Results file** — `benchmark-results/ttft_benchmark_YYYYMMDD_HHMMSS.txt` with full statistics
+
+### Analysis script (`analyze_logs.py`)
+
+Parses the JSONL logs produced by the benchmark script and generates:
+
+1. **`benchmark-results/analysis_summary.txt`** — human-readable report with summary statistics (mean, median, stddev, 95% CI, P95), linear regression per model (slope in ms/token, R-squared, p-value), and data sufficiency check (target: N >= 30 per condition)
+2. **`benchmark-results/analysis_summary.json`** — machine-readable equivalent with timestamped per-measurement data
+3. **`benchmark-results/analysis_data.csv`** — one row per measurement (model, prompt_tokens, ttft_seconds, timestamp_utc), suitable for scatter plots and external statistical tools
+
+```bash
+# Run analysis (requires venv with structlog)
+python analyze_logs.py
+```
 
 ### Sample Contents Of `.jsonl` File Generated
 ```jsonl
