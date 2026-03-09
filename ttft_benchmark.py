@@ -63,7 +63,11 @@ from typing import (
 )
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import (
+    APIError,
+    OpenAI,
+    RateLimitError,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -117,6 +121,30 @@ SLEEP_SECONDS_BETWEEN_CACHE_HITS = float(
 # tokens; 15 is a conservative upper bound.
 ESTIMATED_USER_QUERY_TOKENS = int(
     os.getenv("ESTIMATED_USER_QUERY_TOKENS", "15")
+)
+
+# Adaptive rate limiting configuration.
+# Pattern ported from newsletter-declutter-agent
+# (see /posts/2025/12/newsletter-declutter-ai-
+# agent-using-react-pattern/).
+# The interval self-adjusts: decreases on
+# success (x ADAPTIVE_DECREASE_FACTOR), increases
+# on 429 (x ADAPTIVE_INCREASE_FACTOR), bounded
+# between min and max.
+ADAPTIVE_MIN_INTERVAL = float(
+    os.getenv("ADAPTIVE_MIN_INTERVAL", "2.0")
+)
+ADAPTIVE_MAX_INTERVAL = float(
+    os.getenv("ADAPTIVE_MAX_INTERVAL", "30.0")
+)
+ADAPTIVE_INCREASE_FACTOR = float(
+    os.getenv("ADAPTIVE_INCREASE_FACTOR", "2.0")
+)
+ADAPTIVE_DECREASE_FACTOR = float(
+    os.getenv("ADAPTIVE_DECREASE_FACTOR", "0.9")
+)
+ADAPTIVE_MAX_RETRIES = int(
+    os.getenv("ADAPTIVE_MAX_RETRIES", "3")
 )
 
 # -----------------------------------------------------------------------------
@@ -329,6 +357,155 @@ def _percentile(
     )
     idx = min(p - 1, len(cuts) - 1)
     return cuts[idx]
+
+
+# -----------------------------------------------------------------------------
+# Adaptive rate limiting
+# Pattern: self-adjusting interval between API
+# calls. Ported from newsletter-declutter-agent
+# (decorator-based, thread-safe). Adapted here
+# as a stateful class for explicit control in
+# the benchmark loop.
+# -----------------------------------------------------------------------------
+
+
+class AdaptiveRateLimiter:
+    """
+    Self-adjusting rate limiter for API calls.
+
+    Decreases interval on success (gradually
+    speeds up). Increases interval on rate limit
+    (quickly backs off). Retries failed requests
+    with exponential backoff.
+
+    Ported from newsletter-declutter-agent/
+    utils.py, adapted for OpenAI SDK errors.
+    """
+
+    def __init__(
+        self,
+        min_interval: float = ADAPTIVE_MIN_INTERVAL,
+        max_interval: float = ADAPTIVE_MAX_INTERVAL,
+        increase_factor: float = (
+            ADAPTIVE_INCREASE_FACTOR
+        ),
+        decrease_factor: float = (
+            ADAPTIVE_DECREASE_FACTOR
+        ),
+        max_retries: int = ADAPTIVE_MAX_RETRIES,
+    ) -> None:
+        self.current_interval = min_interval
+        self.min_interval = min_interval
+        self.max_interval = max_interval
+        self.increase_factor = increase_factor
+        self.decrease_factor = decrease_factor
+        self.max_retries = max_retries
+        self.total_retries = 0
+        self.total_rate_limits = 0
+
+    def wait(self) -> None:
+        """
+        Sleep for the current adaptive interval.
+        """
+        time.sleep(self.current_interval)
+
+    def record_success(self) -> None:
+        """
+        Decrease interval after a successful
+        request.
+        """
+        self.current_interval = max(
+            self.min_interval,
+            self.current_interval
+            * self.decrease_factor,
+        )
+
+    def record_rate_limit(self) -> None:
+        """
+        Increase interval after a 429
+        response.
+        """
+        self.total_rate_limits += 1
+        self.current_interval = min(
+            self.max_interval,
+            self.current_interval
+            * self.increase_factor,
+        )
+        log.warning(
+            "rate_limit_hit",
+            new_interval=(
+                f"{self.current_interval:.1f}s"
+            ),
+            total_rate_limits=(
+                self.total_rate_limits
+            ),
+        )
+
+    def execute_with_retry(
+        self,
+        func: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute func with retry on RateLimitError.
+        Returns the function result, or the result
+        of the last failed attempt if all retries
+        are exhausted.
+        """
+        for attempt in range(self.max_retries):
+            try:
+                result = func(**kwargs)
+                self.record_success()
+                return result
+            except (RateLimitError, APIError) as e:
+                if (
+                    not isinstance(e, RateLimitError)
+                    and "Too Many Requests"
+                    not in str(e)
+                ):
+                    raise
+                self.record_rate_limit()
+                self.total_retries += 1
+                if attempt < self.max_retries - 1:
+                    backoff = (
+                        self.current_interval
+                        * (2 ** attempt)
+                    )
+                    log.warning(
+                        "retry_backoff",
+                        attempt=attempt + 1,
+                        max_retries=(
+                            self.max_retries
+                        ),
+                        backoff_seconds=(
+                            f"{backoff:.1f}"
+                        ),
+                        error=str(e),
+                    )
+                    time.sleep(backoff)
+                else:
+                    log.error(
+                        "max_retries_exhausted",
+                        total_attempts=(
+                            self.max_retries
+                        ),
+                        error=str(e),
+                    )
+                    raise
+
+    def summary(self) -> str:
+        """
+        Return a summary of rate limiting
+        activity.
+        """
+        return (
+            f"Rate limits hit: "
+            f"{self.total_rate_limits}, "
+            f"Total retries: "
+            f"{self.total_retries}, "
+            f"Final interval: "
+            f"{self.current_interval:.2f}s"
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -883,7 +1060,12 @@ def _measure_ttft_with_prefix(
 
         return ttft, cached_tokens
 
-    except Exception as e:
+    except (RateLimitError, APIError) as e:
+        if (
+            isinstance(e, RateLimitError)
+            or "Too Many Requests" in str(e)
+        ):
+            raise  # Let caller handle retry
         msg = f"TTFT measurement failed: {e}"
         log.warning(
             "ttft_error",
@@ -1037,6 +1219,7 @@ def run_prefix_caching_benchmark(
 
     results: Dict[int, Dict[str, Any]] = {}
     run_id_base = _generate_run_id()
+    rate_limiter = AdaptiveRateLimiter()
 
     for prefix_size in PREFIX_SIZES:
         sys_prompt = _generate_system_prompt(
@@ -1077,7 +1260,7 @@ def run_prefix_caching_benchmark(
         if results_file:
             results_file.write(warmup_str)
 
-        time.sleep(SLEEP_SECONDS_BETWEEN_REQUESTS)
+        rate_limiter.wait()
 
         # Cache-miss: measure N times with
         # distinct system prompts to get
@@ -1100,14 +1283,18 @@ def run_prefix_caching_benchmark(
             if results_file:
                 results_file.write(run_str)
 
-            miss_ttft, miss_cached = (
-                _measure_ttft_with_prefix(
-                    run_id=miss_id,
-                    system_prompt=miss_sys,
-                    user_query=queries[0],
-                    output_file=results_file,
+            try:
+                miss_ttft, miss_cached = (
+                    rate_limiter.execute_with_retry(
+                        _measure_ttft_with_prefix,
+                        run_id=miss_id,
+                        system_prompt=miss_sys,
+                        user_query=queries[0],
+                        output_file=results_file,
+                    )
                 )
-            )
+            except (RateLimitError, APIError):
+                miss_ttft, miss_cached = None, 0
 
             miss_line = (
                 f"{miss_ttft:.3f}s"
@@ -1123,9 +1310,7 @@ def run_prefix_caching_benchmark(
             if miss_ttft is not None:
                 miss_ttfts.append(miss_ttft)
 
-            time.sleep(
-                SLEEP_SECONDS_BETWEEN_REQUESTS
-            )
+            rate_limiter.wait()
 
         miss_mean = (
             statistics.mean(miss_ttfts)
@@ -1152,14 +1337,18 @@ def run_prefix_caching_benchmark(
             if results_file:
                 results_file.write(run_str)
 
-            hit_ttft, hit_cached = (
-                _measure_ttft_with_prefix(
-                    run_id=hit_id,
-                    system_prompt=sys_prompt,
-                    user_query=query,
-                    output_file=results_file,
+            try:
+                hit_ttft, hit_cached = (
+                    rate_limiter.execute_with_retry(
+                        _measure_ttft_with_prefix,
+                        run_id=hit_id,
+                        system_prompt=sys_prompt,
+                        user_query=query,
+                        output_file=results_file,
+                    )
                 )
-            )
+            except (RateLimitError, APIError):
+                hit_ttft, hit_cached = None, 0
 
             if hit_ttft is not None:
                 hit_ttfts.append(hit_ttft)
@@ -1177,9 +1366,7 @@ def run_prefix_caching_benchmark(
             if results_file:
                 results_file.write(hit_line)
 
-            time.sleep(
-                SLEEP_SECONDS_BETWEEN_REQUESTS
-            )
+            rate_limiter.wait()
 
         # Collect results for this prefix size
         results[prefix_size] = {
@@ -1230,6 +1417,16 @@ def run_prefix_caching_benchmark(
         if results_file:
             results_file.write("\n")
         print()
+
+    # Print adaptive rate limiter summary
+    rl_summary = rate_limiter.summary()
+    rl_line = (
+        f"\nAdaptive rate limiting: "
+        f"{rl_summary}\n"
+    )
+    print(rl_line, end="")
+    if results_file:
+        results_file.write(rl_line)
 
     return results, run_id_base
 

@@ -38,6 +38,9 @@ python ttft_benchmark.py
 
 # Run the prefix caching benchmark (cache-miss vs cache-hit TTFT)
 python ttft_benchmark.py --prefix-caching
+
+# Run tests
+pytest test_adaptive_rate_limiter.py -v
 ```
 
 Notes:
@@ -112,10 +115,14 @@ These uncontrolled factors are the point: they represent real-world conditions m
 | Cache-miss iterations | 3 | Distinct system prompts per measurement to avoid inadvertent caching |
 | Cache-hit iterations | 20 | Sufficient for P50/P95 reporting |
 | Warmup | 1 request per prefix size | Avoids TCP/TLS handshake contamination |
-| Inter-request delay | 15 seconds | Matches standard mode; avoids rate limiting |
+| Inter-request delay | Adaptive (2-30s) | Self-adjusting: decreases on success, increases on 429. See below. |
 | System prompt content | Padded instructional text | Ensures consistent tokenisation above caching threshold |
 
 The benchmark validates cache hits by checking `cached_tokens` in the API response usage data. A "Calculated vs Measured" comparison surfaces the gap between arithmetic estimates (which assume prefill cost dominates) and empirical results (which include network latency and infrastructure overhead).
+
+### Adaptive Rate Limiting (Prefix Caching Mode)
+
+The prefix caching benchmark uses a self-adjusting inter-request interval to handle 429 (rate limit) responses from the API. The interval starts at `ADAPTIVE_MIN_INTERVAL` (default: 2s), decreases by `ADAPTIVE_DECREASE_FACTOR` (default: 0.9x) on each success, and increases by `ADAPTIVE_INCREASE_FACTOR` (default: 2x) on each 429, bounded by `ADAPTIVE_MAX_INTERVAL` (default: 30s). Failed requests are retried up to `ADAPTIVE_MAX_RETRIES` (default: 3) times with exponential backoff. A summary of rate limiting activity is printed at the end of each run.
 
 ---
 
