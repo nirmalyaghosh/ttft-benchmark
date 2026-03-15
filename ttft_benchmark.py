@@ -20,6 +20,15 @@ Supports multiple providers:
 - Azure OpenAI: Use
   OPENAI_BASE_URL="https://your-resource.openai.azure.com/openai/v1/",
   OPENAI_API_KEY=<azure-key>, MODEL=<deployment-name>
+- DashScope (Qwen): Use
+  OPENAI_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  OPENAI_API_KEY=<dashscope-key>, MODEL=<qwen-model>
+- Zhipu AI (GLM): Use
+  OPENAI_BASE_URL="https://api.z.ai/v1",
+  OPENAI_API_KEY=<zhipu-key>, MODEL=<glm-model>
+- Google (Gemini): Use
+  OPENAI_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/",
+  OPENAI_API_KEY=<gemini-key>, MODEL=<gemini-model>
 - Other OpenAI-compatible endpoints: Configure BASE_URL and API_KEY accordingly
 
 To switch providers,
@@ -334,6 +343,18 @@ def _identify_provider() -> str:
         return "OpenRouter"
     elif OPENAI_BASE_URL and "azure" in OPENAI_BASE_URL:
         return "Azure OpenAI"
+    elif OPENAI_BASE_URL and "deepseek.com" in OPENAI_BASE_URL:
+        return "DeepSeek"
+    elif OPENAI_BASE_URL and "aliyuncs.com" in OPENAI_BASE_URL:
+        return "DashScope (Qwen)"
+    elif OPENAI_BASE_URL and "api.z.ai" in OPENAI_BASE_URL:
+        return "Zhipu AI (GLM)"
+    elif (
+        OPENAI_BASE_URL
+        and "generativelanguage.googleapis.com"
+        in OPENAI_BASE_URL
+    ):
+        return "Google (Gemini)"
     else:
         return "OpenAI-compatible endpoint"
 
