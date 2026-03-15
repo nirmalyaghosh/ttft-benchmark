@@ -306,10 +306,17 @@ def _parse_logs(
 
     Returns:
         requests: run_id -> {model, tokens, timestamp}
-        responses: run_id -> ttft (seconds)
+        responses: seq_id -> ttft (seconds)
+
+    Note: the benchmark script reuses the same
+    run_id for all iterations of a given prompt
+    size. This function generates unique seq_ids
+    (run_id + counter) to preserve all
+    measurements.
     """
     requests: Dict[str, Dict[str, Any]] = {}
     responses: Dict[str, float] = {}
+    run_id_counts: Dict[str, int] = {}
 
     for path in log_files:
         try:
@@ -366,12 +373,31 @@ def _parse_logs(
                         == "first_token_received"
                     ):
                         ttft = rec.get("ttft")
-                        if (
-                            ttft is not None
-                            and run_id
-                            not in responses
-                        ):
-                            responses[run_id] = ttft
+                        if ttft is not None:
+                            count = (
+                                run_id_counts
+                                .get(run_id, 0)
+                            )
+                            seq_id = (
+                                f"{run_id}"
+                                f"#{count}"
+                            )
+                            responses[seq_id] = ttft
+                            run_id_counts[
+                                run_id
+                            ] = count + 1
+                            # Map seq_id to same
+                            # request metadata
+                            if (
+                                run_id in requests
+                                and seq_id
+                                not in requests
+                            ):
+                                requests[
+                                    seq_id
+                                ] = requests[
+                                    run_id
+                                ]
 
         except OSError as e:
             log.error(
